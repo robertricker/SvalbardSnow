@@ -42,7 +42,6 @@ class Icesat2Heights:
             rgt = [item[1] for item in missing]
             region_a = ipx.Query(short_name, self.spatial_extent, date_range, tracks=rgt, start_time='00:00:00',
                                  end_time='23:59:59')
-            region_a.earthdata_login()
             region_a.order_vars.append(keyword_list=['heights', 'orbit_info'])
             region_a.subsetparams(Coverage=region_a.order_vars.wanted)
             region_a.avail_granules()
@@ -96,6 +95,11 @@ class Icesat2Heights:
 
     def atl03_to_gdf(self, aoi=None, coast=None, glaciers=None):
         atlas_sdp_gps_epoch = 1198800018.0
+
+        def convert_gps_to_datetime(gps_secs):
+            gps_epoch = datetime(1980, 1, 6, 0, 0, 0)
+            return gps_epoch + timedelta(seconds=gps_secs)
+
         gdf_list = list()
         for file in self.target_files:
             atl03_data, atl03_attrs, atl03_beams = self.read_atl03(file, attributes=True)
@@ -109,8 +113,10 @@ class Icesat2Heights:
                     [sub_array[0] for sub_array in atl03_data[beam]['heights']['signal_conf_ph']])
                 tmp['latitude'] = atl03_data[beam]['heights']['lat_ph']
                 tmp['longitude'] = atl03_data[beam]['heights']['lon_ph']
-                tmp['time'] = Time(atl03_data[beam]['heights']['delta_time'] +
-                                   atlas_sdp_gps_epoch, format='gps').to_datetime()
+                # tmp['time'] = Time(atl03_data[beam]['heights']['delta_time'] +
+                #                    atlas_sdp_gps_epoch, format='gps').to_datetime()
+                tmp['time'] = atl03_data[beam]['heights']['delta_time'] + atlas_sdp_gps_epoch
+                tmp['time'] = tmp['time'].apply(lambda x: convert_gps_to_datetime(x))
                 tmp['beam'] = beam
                 tmp['beam_type'] = atl03_attrs[beam]['atlas_beam_type'].decode('utf8')
                 tmp['orbit_number'] = atl03_data['orbit_info']['orbit_number'][0]
@@ -131,6 +137,7 @@ class Icesat2Heights:
                                                        'longitude': list,
                                                        'latitude': list}).reset_index()
 
+                    grouped['ph_count_shot'] = grouped['h_ph'].apply(len)
                     columns_to_filter = ['h_ph', 'longitude', 'latitude', 'geometry']
                     grouped_filtered = grouped.apply(lambda row:
                                                      self.filter_percentile(row, 'h_ph', columns_to_filter), axis=1)
@@ -138,10 +145,12 @@ class Icesat2Heights:
                     grouped_filtered['beam'] = tmp['beam'][0]
                     grouped_filtered['beam_type'] = tmp['beam_type'][0]
                     grouped_filtered['orbit_number'] = tmp['orbit_number'][0]
+                    grouped_filtered['ph_count_shot'] = grouped['ph_count_shot'].copy()
                     grouped_filtered = grouped_filtered[grouped_filtered['h_ph'].apply(lambda x: len(x) > 0)]
                     grouped_filtered.reset_index(drop=True, inplace=True)
                     window_size = 5
                     p50 = []
+                    p85 = []
                     p99 = []
                     n_ph = []
                     if len(grouped_filtered) > window_size*2:
@@ -150,11 +159,13 @@ class Icesat2Heights:
                             subset = np.concatenate(subset)
                             subset_t = grouped_filtered['time'][i:i + window_size].reset_index(drop=True)
                             p50.append(self.aggregate_function(subset, subset_t, window_size, 50))
+                            p85.append(self.aggregate_function(subset, subset_t, window_size, 85))
                             p99.append(self.aggregate_function(subset, subset_t, window_size, 99))
                             n_ph.append(len(subset))
 
                         padding = int((window_size - 1) / 2) * [np.nan]
                         grouped_filtered['h_ph_p50'] = padding + p50 + padding
+                        grouped_filtered['h_ph_p85'] = padding + p85 + padding
                         grouped_filtered['h_ph_p99'] = padding + p99 + padding
                         grouped_filtered['n_ph'] = padding + n_ph + padding
                         grouped_filtered['geometry'] = grouped_filtered['geometry'].apply(self.calculate_mean_position)

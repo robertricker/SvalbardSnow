@@ -21,6 +21,7 @@ class ArcticDem:
         self.data = dict()
 
     def collect_in_aoi(self, aoi):
+        print(self.tile_idx_file)
         tile_ind_list = gpd.read_file(self.tile_idx_file)
         intersecting_polygons = gpd.sjoin(tile_ind_list, aoi, predicate='intersects')
         intersecting_polygons.reset_index(drop=True, inplace=True)
